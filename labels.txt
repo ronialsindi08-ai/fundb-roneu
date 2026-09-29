@@ -1,4 +1,4 @@
-0 helm
-1 flasche
-2 sonstiges
-3 turnbeutel
+Flasche
+Sporttasche
+Fahrradhelm
+Sonstiges
