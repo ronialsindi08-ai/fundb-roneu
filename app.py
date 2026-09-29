@@ -18,7 +18,17 @@ FALLBACK_LABELS = ["Helm", "Flasche", "sonstiges", "Turnbeutel"]
 def load_keras_model():
     if os.path.exists(MODEL_PATH):
         try:
-            return tf.keras.models.load_model(MODEL_PATH, compile=False)
+            # FIX: Keras-Patch für 'groups'-Fehler bei DepthwiseConv2D (z. B. aus Teachable Machine)
+            class CustomDepthwiseConv2D(tf.keras.layers.DepthwiseConv2D):
+                def __init__(self, **kwargs):
+                    kwargs.pop("groups", None)
+                    super().__init__(**kwargs)
+
+            custom_objects = {"DepthwiseConv2D": CustomDepthwiseConv2D}
+            
+            return tf.keras.models.load_model(
+                MODEL_PATH, compile=False, custom_objects=custom_objects
+            )
         except Exception as e:
             st.error(f"Fehler beim Laden des Modells ({MODEL_PATH}): {e}")
             return None
@@ -33,7 +43,7 @@ def load_labels():
             for line in f.readlines():
                 cleaned = line.strip()
                 if cleaned:
-                    # Falls Labels als "0 Helm" formatiert sind, Zahl vorn abschneiden
+                    # Falls Labels z. B. als "0 Helm" formatiert sind, Zahl vorn abschneiden
                     parts = cleaned.split(" ", 1)
                     if len(parts) > 1 and parts[0].isdigit():
                         labels_list.append(parts[1])
@@ -74,7 +84,7 @@ def predict_image(image):
     img = image.convert("RGB").resize((224, 224))
     img_array = np.array(img, dtype=np.float32)
 
-    # Normalisierung (Teachable Machine / Keras Standard)
+    # Normalisierung (Teachable Machine / MobileNet Standard: [-1, 1])
     img_array = (img_array / 127.5) - 1.0
     img_array = np.expand_dims(img_array, axis=0)
 
