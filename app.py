@@ -1,65 +1,33 @@
 import os
 import json
-import numpy as np
 from PIL import Image
 import streamlit as st
-import tensorflow as tf
+from transformers import pipeline
 
-# --- KONFIGURATION ---
-MODEL_PATH = "keras_model.h5"
-LABELS_PATH = "labels.txt"
+# --- DATEN-HANDLING ---
 DATA_FILE = "fundbuero_data.json"
 
-# Standard-Klassen als Fallback, falls labels.txt fehlen sollte
-FALLBACK_LABELS = ["Helm", "Flasche", "sonstiges", "Turnbeutel"]
+# Deine gewünschten Klassen für das Fundbüro
+CATEGORIES = ["Helm", "Flasche", "Turnbeutel", "sonstiges"]
 
 
 @st.cache_resource
-def load_keras_model():
-    if os.path.exists(MODEL_PATH):
-        try:
-            # FIX: Keras-Patch für 'groups'-Fehler bei DepthwiseConv2D (z. B. aus Teachable Machine)
-            class CustomDepthwiseConv2D(tf.keras.layers.DepthwiseConv2D):
-                def __init__(self, **kwargs):
-                    kwargs.pop("groups", None)
-                    super().__init__(**kwargs)
-
-            custom_objects = {"DepthwiseConv2D": CustomDepthwiseConv2D}
-            
-            return tf.keras.models.load_model(
-                MODEL_PATH, compile=False, custom_objects=custom_objects
-            )
-        except Exception as e:
-            st.error(f"Fehler beim Laden des Modells ({MODEL_PATH}): {e}")
-            return None
-    return None
+def load_hf_model():
+    try:
+        # Lädt ein Zero-Shot Bildklassifizierungsmodell von Hugging Face
+        classifier = pipeline(
+            "zero-shot-image-classification",
+            model="openai/clip-vit-base-patch32"
+        )
+        return classifier
+    except Exception as e:
+        st.error(f"Fehler beim Laden des Hugging Face Modells: {e}")
+        return None
 
 
-@st.cache_data
-def load_labels():
-    if os.path.exists(LABELS_PATH):
-        with open(LABELS_PATH, "r", encoding="utf-8") as f:
-            labels_list = []
-            for line in f.readlines():
-                cleaned = line.strip()
-                if cleaned:
-                    # Falls Labels z. B. als "0 Helm" formatiert sind, Zahl vorn abschneiden
-                    parts = cleaned.split(" ", 1)
-                    if len(parts) > 1 and parts[0].isdigit():
-                        labels_list.append(parts[1])
-                    else:
-                        labels_list.append(cleaned)
-            if labels_list:
-                return labels_list
-    # Falls Datei nicht existiert oder leer ist, verwende die angegebenen Standard-Klassen
-    return FALLBACK_LABELS
+classifier = load_hf_model()
 
 
-model = load_keras_model()
-labels = load_labels()
-
-
-# --- DATEN-HANDLING ---
 def load_items():
     if os.path.exists(DATA_FILE):
         try:
@@ -75,37 +43,31 @@ def save_items(items):
         json.dump(items, f, ensure_ascii=False, indent=2)
 
 
-# --- KI-VORHERSAGE ---
+# --- KI-VORHERSAGE MIT HUGGING FACE ---
 def predict_image(image):
-    if model is None:
-        return "Fehler: keras_model.h5 nicht gefunden", ""
+    if classifier is None:
+        return "sonstiges", "Hugging Face Modell nicht bereit"
 
-    # Bild für Keras-Modell aufbereiten (Standard 224x224)
-    img = image.convert("RGB").resize((224, 224))
-    img_array = np.array(img, dtype=np.float32)
+    # Bild zu RGB konvertieren
+    img = image.convert("RGB")
 
-    # Normalisierung (Teachable Machine / MobileNet Standard: [-1, 1])
-    img_array = (img_array / 127.5) - 1.0
-    img_array = np.expand_dims(img_array, axis=0)
+    # KI Vorhersage über Hugging Face Pipeline
+    results = classifier(img, candidate_labels=CATEGORIES)
 
-    # Vorhersage
-    predictions = model.predict(img_array)
-    class_idx = int(np.argmax(predictions[0]))
-    confidence = float(predictions[0][class_idx]) * 100
+    # Bestes Ergebnis extrahieren
+    top_result = results[0]
+    detected_label = top_result["label"]
+    confidence = top_result["score"] * 100
 
-    if class_idx < len(labels):
-        detected_label = labels[class_idx]
-        info_str = f"{detected_label} ({confidence:.1f}% Sicherheit)"
-        return detected_label, info_str
-
-    return "sonstiges", "Erkennung unsicher"
+    info_str = f"{detected_label} ({confidence:.1f}% Sicherheit)"
+    return detected_label, info_str
 
 
 # --- STREAMLIT BENUTZEROBERFLÄCHE ---
 st.set_page_config(page_title="KI-Fundbüro", page_icon="🔍", layout="centered")
 
-st.title("🔍 KI-Fundbüro")
-st.caption("Finde verlorene Gegenstände oder trage neue Fundstücke per KI-Fotoerkennung ein.")
+st.title("🔍 KI-Fundbüro (mit Hugging Face KI)")
+st.caption("Finde verlorene Gegenstände oder trage neue Fundstücke per Fotoerkennung ein.")
 
 tab1, tab2 = st.tabs(["🔎 Gegenstand suchen", "➕ Fundstück melden (mit KI)"])
 
@@ -127,7 +89,7 @@ with tab1:
         filtered_items = items
 
     if filtered_items:
-        for item in reversed(filtered_items):  # Neueste zuerst anzeigen
+        for item in reversed(filtered_items):  # Neueste zuerst
             with st.expander(f"📦 {item.get('kategorie', 'Gegenstand')} — Fundort: {item.get('ort', 'Unbekannt')}"):
                 st.write(f"**Beschreibung:** {item.get('beschreibung', '-')}")
                 st.write(f"**Datum:** {item.get('datum', '-')}")
@@ -146,7 +108,7 @@ with tab2:
         image = Image.open(uploaded_file)
         st.image(image, caption="Hochgeladenes Foto", width=250)
 
-        with st.spinner("KI analysiert das Bild..."):
+        with st.spinner("Hugging Face KI analysiert das Bild..."):
             detected_category, confidence_info = predict_image(image)
 
         if confidence_info:
